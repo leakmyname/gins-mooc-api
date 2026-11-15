@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.log
+.venv/
+# 运行期解压产生的数据与数据库（请用 setup.sh 生成，或见 release/）
+data/
+gins_mooc.db
+gins_mooc.db-wal
+gins_mooc.db-shm
+data_old_*/
+data_partial/
