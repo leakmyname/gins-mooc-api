@@ -122,8 +122,11 @@ def api_course_detail(cli, cid):
     return cli.get("/mooc/course/%s" % cid)
 
 
-def api_test_detail(cli, tid):
-    return cli.get("/mooc/test/%s" % tid)
+def api_test_detail(cli, tid, page=None):
+    """上游 questionList 分页，每页 20 题，page 为 0-based"""
+    if page is None:
+        return cli.get("/mooc/test/%s" % tid)
+    return cli.get("/mooc/test/%s" % tid, page=page)
 
 
 def api_test_answers(cli, tid, oid_list=None, title_list=None):
@@ -164,7 +167,7 @@ def norm_question(q, seq):
     qtype = q.get("type")
     if qtype == "COMPLETION":
         answer = std
-    elif qtype == "HOMEWORK":
+    elif qtype in ("HOMEWORK", "ONLINE_JUDGE"):
         answer = strip_html(q.get("answer"))
     else:
         answer = correct
@@ -177,6 +180,11 @@ def norm_question(q, seq):
         "options": opts,
         "stdAnswer": std,
         "answer": answer,
+        # 保留上游原始字段，保证接口可 1:1 复刻
+        "answerHtml": q.get("answer"),
+        "description": q.get("description"),
+        "memoryLimit": q.get("memoryLimit"),
+        "timeLimit": q.get("timeLimit"),
     }
 
 
@@ -192,6 +200,7 @@ def norm_test(td):
         "deadline": meta.get("deadline"),
         "chapterId": meta.get("chapterId"),
         "chapterName": meta.get("chapterName"),
+        "totalPages": td.get("totalPages", 1),
         "questions": [norm_question(q, i + 1) for i, q in enumerate(ql)],
     }
 
@@ -216,13 +225,17 @@ def fetch_courses(cli, max_pages=None, only_ids=None):
             seen.add(cid)
             c = dict(c)
             c["name"] = strip_html(c.get("name"))
-            c["school"] = strip_html(c.get("school"))
+            c["school"] = strip_html(c.get("school")) if c.get("school") is not None else None
             courses.append(c)
         log("课程列表 page %d/%d, 累计 %d 门" % (page, total_pages - 1, len(courses)))
         time.sleep(random.uniform(0.1, 0.3))
     if only_ids:
         ids = set(str(i) for i in only_ids)
         courses = [c for c in courses if str(c.get("id")) in ids]
+    # 保存上游原始顺序，供 SQLite 复刻分页顺序
+    save_json(os.path.join(OUT_DIR, "course_order.json"),
+              {"order": [c["id"] for c in courses],
+               "meta": {str(c["id"]): c for c in courses}})
     return courses
 
 
@@ -260,6 +273,18 @@ def crawl(cli, max_pages=None, only_ids=None, with_answers=True):
             t2 = norm_test(d)
             if not t2.get("name"):
                 t2["name"] = t.get("name")
+            # 题目分页：抓取全部页
+            total_pages = d.get("totalPages") or 1
+            if total_pages > 1:
+                merged = list(t2["questions"])
+                for pg in range(1, total_pages):
+                    rp = api_test_detail(cli, tid, page=pg)
+                    dp = (rp or {}).get("data") or {}
+                    for q in dp.get("questionList") or []:
+                        nq = norm_question(q, len(merged) + 1)
+                        merged.append(nq)
+                t2["questions"] = merged
+                t2["totalPages"] = total_pages
             t2["courseId"] = cid
             t2["courseName"] = v["course"]["name"]
             tests[str(tid)] = t2
@@ -346,6 +371,16 @@ def refresh_tests(cli, only_ids=None):
         oldp = os.path.join(src, fn)
         old = json.load(open(oldp, encoding="utf-8")) if os.path.exists(oldp) else {}
         t2 = norm_test(d)
+        total_pages = d.get("totalPages") or 1
+        if total_pages > 1:
+            merged = list(t2["questions"])
+            for pg in range(1, total_pages):
+                rp = api_test_detail(cli, tid, page=pg)
+                dp = (rp or {}).get("data") or {}
+                for q in dp.get("questionList") or []:
+                    merged.append(norm_question(q, len(merged) + 1))
+            t2["questions"] = merged
+            t2["totalPages"] = total_pages
         t2["courseId"] = old.get("courseId")
         t2["courseName"] = old.get("courseName")
         save_json(oldp, t2)

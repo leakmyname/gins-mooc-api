@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS course (
   name          TEXT,
   school        TEXT,
   image_url     TEXT,
+  sort_index    INTEGER,        -- 上游课程列表的原始顺序
   updated_at    TEXT DEFAULT (datetime('now'))
 );
 
@@ -18,7 +19,8 @@ CREATE TABLE IF NOT EXISTS test (
   deadline      TEXT,
   chapter_id    INTEGER,
   chapter_name  TEXT,
-  total_pages   INTEGER,
+  total_pages   INTEGER,      -- 题目分页总数（上游 questionList 分页）
+  sort_index    INTEGER,      -- 课程 testList 中的原始顺序
   updated_at    TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_test_course ON test(course_id);
@@ -32,6 +34,10 @@ CREATE TABLE IF NOT EXISTS question (
   title_html    TEXT,          -- 原始 HTML（保留 img）
   std_answer    TEXT,          -- 填空题原始答案
   answer        TEXT,          -- 归一化答案(JSON/文本)
+  answer_html   TEXT,          -- 作业题/编程题原始答案 HTML
+  description   TEXT,          -- 编程题描述
+  memory_limit  TEXT,
+  time_limit    TEXT,
   UNIQUE(test_id, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_q_test ON question(test_id);
@@ -59,4 +65,10 @@ CREATE TABLE IF NOT EXISTS notice (
   kind     TEXT,     -- announcement / website / extension
   content  TEXT,
   fetched_at TEXT
+);
+
+-- 杂项元数据（如上游 totalPages）
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT
 );

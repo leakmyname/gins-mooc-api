@@ -3,7 +3,9 @@
 Python 完整复刻 [https://ginnnnnn.top/mooc](https://ginnnnnn.top/mooc)（Gins 中国大学 MOOC 答案助手）的后端 API，
 并附带全量抓取到的课程 / 测验 / 题目 / 答案数据。
 
-数据规模：**455 门课程 · 5060 个测验 · 52093 道题 · 173710 个选项**（绝大多数带标准答案）。
+数据规模：**456 门课程 · 5073 个测验 · 72909 道题 · 238456 个选项**（绝大多数带标准答案）。
+
+> 本地复刻服务与上游逐字段比对（课程分页 / 课程详情 / 测验详情及分页 / POST 答案 / 公告）结果 **完全一致**。
 
 ---
 
@@ -15,7 +17,7 @@ Python 完整复刻 [https://ginnnnnn.top/mooc](https://ginnnnnn.top/mooc)（Gin
 |---|---|---|
 | GET  | `/api/mooc/course` | 课程列表，分页 `page`（**0-based**），返回 `totalPages` / `courseList` |
 | GET  | `/api/mooc/course/{cid}` | 课程详情 + 该课程测验列表 `testList` |
-| GET  | `/api/mooc/test/{tid}` | 测验详情 + `questionList`（选项 `answer` 标记正确项；填空题 `stdAnswer`） |
+| GET  | `/api/mooc/test/{tid}` | 测验详情 + `questionList`（**分页，每页 20 题，page 0-based**，返回 `totalPages`；选项 `answer` 标记正确项；填空题 `stdAnswer`；作业题/编程题返回 `answer`/`description`/`timeLimit`/`memoryLimit`） |
 | GET  | `/api/mooc/test/{tid}?type=isExisting` | 校验测验数据是否存在 → `{"existing":true}` |
 | POST | `/api/mooc/test/{tid}` | 答案查询，入参 `tid` / `oidList` / `titleList`，返回 `choiceAns` / `completionAns` / `homeworkAns` |
 | GET  | `/api/mooc/announcement` | 公告 |
@@ -45,11 +47,12 @@ curl -X POST http://127.0.0.1:8811/api/mooc/test/1258515449 -d "tid=1258515449"
 | 表 | 内容 |
 |---|---|
 | `course` | 课程（id / name / school / image_url） |
-| `test` | 测验（id / course_id / name / objective / 时间 / 章节） |
-| `question` | 题目（id / test_id / seq / type / title / title_html / std_answer / answer） |
+| `test` | 测验（id / course_id / name / objective / 时间 / 章节 / total_pages / sort_index） |
+| `question` | 题目（id / test_id / seq / type / title / title_html / std_answer / answer / answer_html / description / memory_limit / time_limit） |
 | `option` | 选项（question_id / id / content / content_html / is_answer） |
 | `raw_answer` | `POST /mooc/test/{tid}` 的原始响应，便于回放对账 |
 | `notice` | 公告与 notice |
+| `meta` | 杂项元数据（如上游课程列表 `totalPages`） |
 
 选型理由：
 
@@ -106,6 +109,10 @@ uvicorn server:app --host 0.0.0.0 --port 8811
     ├── answers.json        # POST 答案接口原始响应
     ├── questions.jsonl     # 扁平化题目，便于检索
     ├── notices.json
+    ├── course_order.json       # 上游课程列表原始顺序（用于分页排序复刻）
+    ├── course_test_order.json  # 每门课程 testList 原始顺序
+    ├── test_total_pages.json   # 每个测验的题目分页总数
+    ├── course_total_pages.json  # 课程列表 totalPages
     └── mooc_answers.md     # 可读 Markdown 汇总
 ```
 
@@ -119,7 +126,10 @@ python3 crawler.py --no-proxy      # 不走 http://127.0.0.1:7893
 python3 importer.py                # 重新导入 SQLite
 ```
 
-> 注意：上游 `page` 参数是 **0-based**，`page=0` 与不带参数等价；漏掉 `page=0` 会丢前 20 门课。
+> 注意：
+> 1. 上游 `page` 参数是 **0-based**，`page=0` 与不带参数等价；漏掉 `page=0` 会丢前 20 门课。
+> 2. 测验的 `questionList` **同样分页**（每页 20 题），需遍历 `totalPages` 才能取全题。
+> 3. 上游课程列表 `totalPages` 可能不等于 `ceil(课程数/20)`（如 456 门 → 24 页），已按抓取值复刻。
 
 ## 6. 免责声明
 

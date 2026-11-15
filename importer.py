@@ -9,6 +9,8 @@ DB = os.path.join(ROOT, "gins_mooc.db")
 
 
 def connect():
+    if os.path.exists(DB):
+        os.remove(DB)
     con = sqlite3.connect(DB)
     con.row_factory = sqlite3.Row
     con.executescript(open(os.path.join(ROOT, "schema.sql")).read())
@@ -20,12 +22,33 @@ def main():
     cur = con.cursor()
 
     courses = json.load(open(os.path.join(DATA, "courses.json"), encoding="utf-8"))
+    # 上游课程列表顺序（分页 0-based，按顺序遍历）
+    orderfile = os.path.join(DATA, "course_order.json")
+    sort_idx = {}
+    if os.path.exists(orderfile):
+        od = json.load(open(orderfile, encoding="utf-8"))
+        sort_idx = {cid: i for i, cid in enumerate(od["order"])}
     cur.executemany(
-        "INSERT INTO course(id,name,school,image_url) VALUES(?,?,?,?) "
+        "INSERT INTO course(id,name,school,image_url,sort_index) VALUES(?,?,?,?,?) "
         "ON CONFLICT(id) DO UPDATE SET name=excluded.name,school=excluded.school,"
-        "image_url=excluded.image_url,updated_at=datetime('now')",
-        [(c["id"], c.get("name"), c.get("school"), c.get("imageUrl")) for c in courses])
+        "image_url=excluded.image_url,sort_index=excluded.sort_index,"
+        "updated_at=datetime('now')",
+        [(c["id"], c.get("name"), c.get("school") or None, c.get("imageUrl"),
+          sort_idx.get(c["id"], 10**9)) for c in courses])
     print("courses:", len(courses))
+
+    # 测验在课程 testList 中的原始顺序 + 题目分页总数
+    torder = {}
+    cof = os.path.join(DATA, "course_test_order.json")
+    if os.path.exists(cof):
+        co = json.load(open(cof, encoding="utf-8"))
+        for cid, lst in co.items():
+            for i, tid in enumerate(lst):
+                torder[int(tid)] = i
+    tpages = {}
+    tpf = os.path.join(DATA, "test_total_pages.json")
+    if os.path.exists(tpf):
+        tpages = {int(k): v for k, v in json.load(open(tpf, encoding="utf-8")).items()}
 
     cur.execute("DELETE FROM option"); cur.execute("DELETE FROM question")
     cur.execute("DELETE FROM test"); cur.execute("DELETE FROM raw_answer")
@@ -37,17 +60,24 @@ def main():
             continue
         cur.execute(
             "INSERT OR REPLACE INTO test(id,course_id,name,objective,release_time,deadline,"
-            "chapter_id,chapter_name) VALUES(?,?,?,?,?,?,?,?)",
-            (tid, d.get("courseId"), d.get("name"), int(d.get("objective") or 0),
-             d.get("releaseTime"), d.get("deadline"), d.get("chapterId"), d.get("chapterName")))
+            "chapter_id,chapter_name,total_pages,sort_index) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (tid, int(d.get("courseId")) if d.get("courseId") else None, d.get("name"),
+             int(d.get("objective") or 0),
+             d.get("releaseTime"), d.get("deadline"), d.get("chapterId"), d.get("chapterName"),
+             int(tpages.get(int(tid), d.get("totalPages") or 1)),
+             torder.get(int(tid), 10**9)))
         nt += 1
         for q in d.get("questions", []):
             cur.execute(
-                "INSERT OR REPLACE INTO question(id,test_id,seq,type,title,title_html,std_answer,answer)"
-                " VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO question(id,test_id,seq,type,title,title_html,std_answer,answer,"
+                "answer_html,description,memory_limit,time_limit) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (q.get("id"), tid, q.get("seq"), q.get("type"), q.get("title"),
                  q.get("titleHtml"), json.dumps(q.get("stdAnswer"), ensure_ascii=False),
-                 json.dumps(q.get("answer"), ensure_ascii=False)))
+                 json.dumps(q.get("answer"), ensure_ascii=False),
+                 json.dumps(q.get("answerHtml"), ensure_ascii=False),
+                 json.dumps(q.get("description"), ensure_ascii=False),
+                 json.dumps(q.get("memoryLimit")),
+                 json.dumps(q.get("timeLimit"))))
             nq += 1
             for i, o in enumerate(q.get("options") or []):
                 cur.execute(
@@ -65,6 +95,12 @@ def main():
         cur.executemany("INSERT OR REPLACE INTO raw_answer(test_id,payload) VALUES(?,?)",
                         [(int(k), json.dumps(v, ensure_ascii=False)) for k, v in raw.items()])
         print("raw_answer:", len(raw))
+
+    mtp = os.path.join(DATA, "course_total_pages.json")
+    if os.path.exists(mtp):
+        m = json.load(open(mtp, encoding="utf-8"))
+        cur.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('course_total_pages',?)",
+                    (str(m.get("totalPages")),))
 
     notices = json.load(open(os.path.join(DATA, "notices.json"), encoding="utf-8"))
     for kind, v in notices.items():
